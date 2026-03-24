@@ -1,0 +1,19 @@
+services:
+
+  postgres:
+    image: postgres:16
+    container_name: library-postgres
+    ports:
+      - "5432:5432"
+    environment:
+      POSTGRES_USER: "vaultadmin"
+      POSTGRES_PASSWORD: "vaultadminpass"
+      POSTGRES_DB: "librarydemo"
+    volumes:
+      - ../shared/postgres/data:/var/lib/postgresql/data:Z
+      - ./postgres/init:/docker-entrypoint-initdb.d:Z
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U vaultadmin -d librarydemo"]
+      interval: 10s
+      timeout: 5s
+      retries: 10      

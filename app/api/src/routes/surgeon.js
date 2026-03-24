@@ -23,12 +23,15 @@ function addSeconds(seconds) {
 
 router.post("/issue", async (_req, res) => {
   try {
-    const response = await fetch(`${VAULT_ADDR}/v1/database/static-creds/surgeon`, {
-      method: "GET",
-      headers: {
-        "X-Vault-Token": VAULT_TOKEN,
+    const response = await fetch(
+      `${VAULT_ADDR}/v1/database/static-creds/surgeon`,
+      {
+        method: "GET",
+        headers: {
+          "X-Vault-Token": VAULT_TOKEN,
+        },
       },
-    });
+    );
 
     const payload = await response.json();
 
@@ -110,12 +113,15 @@ router.post("/test", async (req, res) => {
 
 router.post("/rotate", async (_req, res) => {
   try {
-    const response = await fetch(`${VAULT_ADDR}/v1/database/rotate-role/surgeon`, {
-      method: "POST",
-      headers: {
-        "X-Vault-Token": VAULT_TOKEN,
+    const response = await fetch(
+      `${VAULT_ADDR}/v1/database/rotate-role/surgeon`,
+      {
+        method: "POST",
+        headers: {
+          "X-Vault-Token": VAULT_TOKEN,
+        },
       },
-    });
+    );
 
     const text = await response.text();
 

@@ -18,7 +18,7 @@ router.post("/rotate-root", async (_req, res) => {
         headers: {
           "X-Vault-Token": VAULT_TOKEN,
         },
-      }
+      },
     );
 
     const text = await response.text();

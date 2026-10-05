@@ -63,3 +63,13 @@ justfile
 .secrets/
 vault-tls/vault.key
 backups/
+
+# ── Added by commit_gh --harden ─────────────────────────────
+*.env
+.vault.*
+*.vault
+*.jsonl
+input/*
+!input/.gitkeep
+output/*
+!output/.gitkeep

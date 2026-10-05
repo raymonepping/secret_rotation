@@ -1,17 +1,11 @@
 import { useEffect, useState } from "react";
-
-const API_BASE = import.meta.env.VITE_API_BASE || "http://127.0.0.1:3000";
-
-function formatTime(iso) {
-  if (!iso) return "n/a";
-  return new Date(iso).toLocaleTimeString();
-}
-
-function maskPassword(password) {
-  if (!password) return "n/a";
-  if (password.length <= 6) return "••••••";
-  return `${password.slice(0, 2)}••••••${password.slice(-2)}`;
-}
+import { API_BASE } from "../api";
+import { apiError, formatTime, maskPassword, statusTone } from "../lib/format";
+import KeyValue from "../ui/KeyValue";
+import Pane from "../ui/Pane";
+import StatusPill from "../ui/StatusPill";
+import TtlBar from "../ui/TtlBar";
+import Verdict from "../ui/Verdict";
 
 function computeStatus(ttl, currentStatus) {
   if (currentStatus === "rotating") return "rotating";
@@ -21,7 +15,7 @@ function computeStatus(ttl, currentStatus) {
   return "stable";
 }
 
-export default function SurgeonCard({ autoMode, addSharedEvent }) {
+export default function SurgeonCard({ autoMode, addSharedEvent, role }) {
   const [state, setState] = useState({
     status: "idle",
     username: "",
@@ -32,6 +26,7 @@ export default function SurgeonCard({ autoMode, addSharedEvent }) {
     lastRotation: null,
     lastTest: "n/a",
   });
+  const [failure, setFailure] = useState(null);
 
   useEffect(() => {
     if (!state.rotatesAt || state.status === "idle") return;
@@ -61,9 +56,10 @@ export default function SurgeonCard({ autoMode, addSharedEvent }) {
       const data = await res.json();
 
       if (!res.ok || !data.ok) {
-        throw new Error(data.error || "Failed to load surgeon credentials");
+        throw apiError(res, data, "Failed to load surgeon credentials");
       }
 
+      setFailure(null);
       setState((prev) => ({
         ...prev,
         status: computeStatus(data.ttl, "stable"),
@@ -71,14 +67,16 @@ export default function SurgeonCard({ autoMode, addSharedEvent }) {
         password: data.password,
         ttl: data.ttl,
         rotationPeriod: data.rotation_period,
-        rotatesAt: data.rotates_at,
+        // On this browser's clock (see PatientMonitor): ttl is relative.
+        rotatesAt: data.ttl > 0 ? new Date(Date.now() + data.ttl * 1000).toISOString() : null,
         lastRotation: data.last_vault_rotation || prev.lastRotation,
       }));
-    } catch (_err) {
+    } catch (error) {
       setState((prev) => ({
         ...prev,
         status: "failed",
       }));
+      setFailure({ title: "Read the static credential", path: `database/static-creds/${role}`, error: error.message, vaultStatus: error.vaultStatus });
     }
   }
 
@@ -105,7 +103,7 @@ export default function SurgeonCard({ autoMode, addSharedEvent }) {
         ...prev,
         lastTest: "alive",
       }));
-    } catch (_err) {
+    } catch {
       setState((prev) => ({
         ...prev,
         lastTest: "failed",
@@ -128,7 +126,7 @@ export default function SurgeonCard({ autoMode, addSharedEvent }) {
       const data = await res.json();
 
       if (!res.ok || !data.ok) {
-        throw new Error(data.error || "Rotation failed");
+        throw apiError(res, data, "Rotation failed");
       }
 
       addSharedEvent("Surgeon rotated static role password", "warning", "surgeon");
@@ -147,11 +145,12 @@ export default function SurgeonCard({ autoMode, addSharedEvent }) {
           status: computeStatus(prev.ttl, "stable"),
         }));
       }, 1200);
-    } catch (_err) {
+    } catch (error) {
       setState((prev) => ({
         ...prev,
         status: "failed",
       }));
+      setFailure({ title: "Rotate the static role", path: `database/rotate-role/${role}`, error: error.message, vaultStatus: error.vaultStatus });
 
       addSharedEvent("Surgeon failed to rotate static role password", "critical", "surgeon");
     }
@@ -171,70 +170,55 @@ export default function SurgeonCard({ autoMode, addSharedEvent }) {
     return () => clearInterval(interval);
   }, [autoMode, state.username]);
 
+  const tone = statusTone(state.status);
+  const ttlTone = statusTone(computeStatus(state.ttl, state.status));
+
   return (
-    <section className={`card lane-card status-${state.status}`}>
-      <div className="lane-card-inner">
-        <div className="lane-card-left">
-          <div className="panel-header lane-header">
-            <div>
-              <p className="panel-label">Lane</p>
-              <h2>Surgeon</h2>
+    <Pane
+      id="surgeon"
+      eyebrow="Static role · rotate-role"
+      title="Surgeon"
+      tone={tone === "warn" || tone === "denied" ? tone : undefined}
+      aside={<StatusPill status={state.status} live={state.status === "rotating"} />}
+    >
+      <div className="lane-body">
+        <div className="lane-row">
+          <div className="lane-body">
+            <p className="lede">
+              The account exists in PostgreSQL; Vault owns its password and changes it on a schedule, or now.
+            </p>
+            <div className="kv-grid">
+              <KeyValue label="Username" value={state.username || "n/a"} tone="authority" mono />
+              <KeyValue label="Password" value={maskPassword(state.password)} tone="cipher" />
+              <KeyValue label="Rotation period" value={state.rotationPeriod ? `${state.rotationPeriod}s` : "n/a"} />
+              <KeyValue label="Last rotation" value={formatTime(state.lastRotation)} />
+              <KeyValue
+                label="Last test"
+                value={state.lastTest}
+                tone={state.lastTest === "alive" ? "ok" : state.lastTest === "failed" ? "denied" : undefined}
+              />
             </div>
           </div>
-
-          <div className="lane-stats lane-stats-wide">
-            <div className="lane-stat">
-              <span className="label">Username</span>
-              <span className="value">{state.username || "n/a"}</span>
-            </div>
-
-            <div className="lane-stat">
-              <span className="label">Password</span>
-              <span className="value">{maskPassword(state.password)}</span>
-            </div>
-
-            <div className={`lane-stat severity severity-${computeStatus(state.ttl, state.status)}`}>
-              <span className="label">Next Rotation</span>
-              <span className="value">{state.ttl ? `${state.ttl}s` : "n/a"}</span>
-            </div>
-
-            <div className="lane-stat">
-              <span className="label">Rotation Period</span>
-              <span className="value">
-                {state.rotationPeriod ? `${state.rotationPeriod}s` : "n/a"}
-              </span>
-            </div>
-
-            <div className="lane-stat">
-              <span className="label">Last Rotation</span>
-              <span className="value">{formatTime(state.lastRotation)}</span>
-            </div>
-
-            <div className="lane-stat">
-              <span className="label">Last Test</span>
-              <span className="value">{state.lastTest}</span>
-            </div>
-          </div>
-        </div>
-
-        <div className="lane-card-right">
-          <div className={`status-pill status-${state.status}`}>
-            {state.status.toUpperCase()}
-          </div>
-
-          <div className="doctor-actions">
-            <button onClick={loadCreds} className="secondary">
-              Load Static Creds
+          <div className="lane-actions">
+            <button type="button" onClick={loadCreds} className="btn btn-quiet">
+              Load static creds
             </button>
-            <button onClick={testCreds} className="secondary" disabled={!state.username}>
+            <button type="button" onClick={testCreds} className="btn btn-quiet" disabled={!state.username}>
               Test
             </button>
-            <button onClick={rotateNow} disabled={!state.username || state.status === "rotating"}>
-              {state.status === "rotating" ? "Rotating..." : "Rotate Role"}
+            <button
+              type="button"
+              onClick={rotateNow}
+              className="btn btn-amber"
+              disabled={!state.username || state.status === "rotating"}
+            >
+              {state.status === "rotating" ? "Rotating…" : "Rotate role"}
             </button>
           </div>
         </div>
+        <TtlBar label="Next rotation" seconds={state.ttl} total={state.rotationPeriod} tone={state.username ? ttlTone : "idle"} />
+        {failure && <Verdict {...failure} sentence="Vault did not complete this request." />}
       </div>
-    </section>
+    </Pane>
   );
 }

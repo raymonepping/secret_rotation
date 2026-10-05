@@ -1,0 +1,39 @@
+# Rendered at start by the image's entrypoint (envsubst only touches variables
+# that exist in the environment, so nginx's own $variables are left alone).
+server {
+  listen 8080;
+  root /usr/share/nginx/html;
+
+  # Lazy DNS: a literal upstream host is resolved once at startup and nginx
+  # refuses to start while the API container does not exist yet. A variable
+  # upstream is resolved per request through Podman's DNS.
+  resolver ${NGINX_LOCAL_RESOLVERS} valid=10s ipv6=off;
+  set $api http://srot-api:3000;
+
+  add_header X-Content-Type-Options nosniff always;
+  add_header Referrer-Policy no-referrer always;
+  # Same origin only: fonts are self-hosted, the API is proxied here.
+  add_header Content-Security-Policy "default-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self'; frame-ancestors 'none'" always;
+
+  location /api/ {
+    proxy_pass $api;
+    proxy_set_header Host $host;
+    proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+  }
+
+  location = /health {
+    proxy_pass $api;
+  }
+
+  # `expires`, not add_header: an add_header inside a location drops every
+  # server-level header above, CSP included.
+  location /assets/ {
+    expires 1y;
+    try_files $uri =404;
+  }
+
+  location / {
+    expires -1;
+    try_files $uri /index.html;
+  }
+}

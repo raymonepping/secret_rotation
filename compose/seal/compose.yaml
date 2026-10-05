@@ -1,0 +1,139 @@
+# compose/seal/compose.yaml — vault-s, the Transit auto-unseal provider.
+#
+# Single-node Raft, Shamir seal (1-of-1). vault-1 unseals through its
+# `autounseal` Transit key, so this is the first container of any cold start
+# and it never unseals itself: `make vault-up` / `make unseal` do that.
+
+services:
+  vault-s:
+    image: ${VAULT_IMAGE}
+    container_name: srot-vault-s
+    hostname: vault-s
+    user: "100:1000"
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    environment:
+      VAULT_ADDR: https://127.0.0.1:8200
+      VAULT_CACERT: /vault/config/tls/ca-chain.pem
+      VAULT_LICENSE: "${VAULT_LICENSE:-}"
+    entrypoint: ["/bin/sh", "/srot/vault-server.sh"]
+    ports: ["127.0.0.1:${SROT_PORT_VAULT_S}:8200"]
+    volumes:
+      - vault-s-data:/vault/file        # persistent: Raft data, holds the Transit key
+      - vault-s-audit:/vault/audit      # persistent: audit log
+      - ../../vault/vault-s/config.hcl:/vault/config/config.hcl:ro   # host
+      - ../../vault-tls:/vault/config/tls:ro                          # host
+      - ../../scripts/vault-server.sh:/srot/vault-server.sh:ro        # host
+    restart: unless-stopped
+    mem_limit: 512m
+    networks: [default]
+    healthcheck:
+      # Healthy = the Vault process answers on its API. Sealed (503) and
+      # uninitialized (501) are normal during bootstrap and after a cold
+      # start; ordering is done by make, not by this check. $$ escapes $.
+      test: ["CMD-SHELL", "S=$$(wget -S -qO/dev/null --no-check-certificate 'https://127.0.0.1:8200/v1/sys/health' 2>&1 | awk '/^ *HTTP\\//{print $$2; exit}'); [ -n \"$$S\" ]"]
+      interval: 10s
+      timeout: 5s
+      retries: 15
+      start_period: 10s
+
+  # One-shot: Podman creates named volumes owned by root; rotator and agent
+  # run as 100:1000.
+  volume-init:
+    image: ${ALPINE_IMAGE}
+    container_name: srot-seal-volume-init
+    user: "0:0"
+    network_mode: none
+    entrypoint: ["/bin/sh", "-c", "chown 100:1000 /sink /approle && chmod 750 /sink && chmod 700 /approle && echo '[volume-init] done'"]
+    volumes:
+      - seal-token:/sink
+      - approle-seal:/approle
+    restart: "no"
+
+  seal-rotator:
+    image: ${VAULT_IMAGE}
+    container_name: srot-seal-rotator
+    hostname: seal-rotator
+    user: "100:1000"
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    read_only: true
+    tmpfs: [/tmp, /home/vault]
+    entrypoint: ["/bin/sh", "/vault/rotator/rotator.sh"]
+    environment:
+      VAULT_ADDR: https://vault-s:8200
+      VAULT_CACERT: /vault/tls/ca-chain.pem
+      TARGET_ROLES: seal-autounseal
+      ROTATOR_CREDS_DIR: /run/rotator
+      CHECK_INTERVAL_SECONDS: "60"
+      ROTATE_BELOW_FRACTION: "3"
+      WARN_IF_SHORTER_THAN: "7776000"
+    volumes:
+      - ../../vault-tls/ca-chain.pem:/vault/tls/ca-chain.pem:ro     # host
+      - ../common/rotator:/vault/rotator:ro                         # host
+      - ../../.secrets/vault/seal-rotator:/run/rotator:ro           # host: the seal rotator's own AppRole
+      - approle-seal:/run/approle                                   # persistent: current secret-id
+    networks: [default]
+    restart: unless-stopped
+    depends_on:
+      volume-init:
+        condition: service_completed_successfully
+    healthcheck:
+      test: ["CMD-SHELL", "/bin/sh /vault/rotator/healthcheck.sh"]
+      interval: 10s
+      timeout: 3s
+      start_period: 15s
+      retries: 5
+
+  seal-agent:
+    image: ${VAULT_IMAGE}
+    container_name: srot-seal-agent
+    hostname: seal-agent
+    user: "100:1000"
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    read_only: true
+    tmpfs: [/tmp, /home/vault]
+    entrypoint: ["/bin/sh", "/vault/agent/entrypoint.sh"]
+    environment:
+      AGENT_NAME: seal-autounseal
+      APPROLE_DIR: /run/approle/seal-autounseal
+      TOKEN_FILE: /vault/secrets/transit-token
+      VAULT_ADDR: https://vault-s:8200
+      VAULT_CACERT: /vault/tls/ca-chain.pem
+    volumes:
+      - ../../vault-tls/ca-chain.pem:/vault/tls/ca-chain.pem:ro     # host
+      - ../common/agent/entrypoint.sh:/vault/agent/entrypoint.sh:ro # host
+      - ./agent/config.hcl:/vault/agent/config.hcl:ro               # host
+      - approle-seal:/run/approle:ro                                # written by the seal rotator
+      - seal-token:/vault/secrets                                   # ephemeral content: the Transit seal token
+    networks: [default]
+    # on-failure: the watchdog exits non-zero when vault-s rejects the token.
+    restart: on-failure
+    depends_on:
+      seal-rotator:
+        condition: service_healthy
+    healthcheck:
+      # A real lookup, not file existence: a dead token is still a non-empty file.
+      test: ["CMD-SHELL", "test -s /vault/secrets/transit-token && VAULT_TOKEN=$$(cat /vault/secrets/transit-token) vault token lookup >/dev/null"]
+      interval: 10s
+      timeout: 5s
+      start_period: 20s
+      retries: 6
+
+networks:
+  default:
+    name: srot-internal
+    external: true
+
+volumes:
+  vault-s-data:
+    labels: { io.srot.data: "true" }
+  vault-s-audit:
+    labels: { io.srot.data: "true" }
+  approle-seal:
+    labels: { io.srot.data: "true" }
+  # The Transit seal token. Shared with compose/vault (mounted there as
+  # external); scripts/common.sh creates it up front with compose's labels so
+  # either stack can start first.
+  seal-token: {}

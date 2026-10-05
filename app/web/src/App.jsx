@@ -1,11 +1,44 @@
-import { useMemo, useState } from "react";
+import { useEffect, useState } from "react";
+import { API_BASE } from "./api";
 import DoctorCard from "./components/DoctorCard";
 import PatientMonitor from "./components/PatientMonitor";
+import PlatformPanel from "./components/PlatformPanel";
+import Shell from "./components/Shell";
 import SurgeonCard from "./components/SurgeonCard";
+
+// /api/platform every 5s: seal and vault state for the top bar and the panel.
+function usePlatform() {
+  const [platform, setPlatform] = useState(null);
+  const [error, setError] = useState(false);
+  useEffect(() => {
+    let stop = false;
+    async function poll() {
+      try {
+        const res = await fetch(`${API_BASE}/api/platform`);
+        const data = await res.json();
+        if (!stop) {
+          setPlatform(data);
+          setError(false);
+        }
+      } catch {
+        if (!stop) setError(true);
+      }
+    }
+    poll();
+    const t = setInterval(poll, 5000);
+    return () => {
+      stop = true;
+      clearInterval(t);
+    };
+  }, []);
+  return [platform, error];
+}
 
 export default function App() {
   const [sharedEvents, setSharedEvents] = useState([]);
   const [autoMode, setAutoMode] = useState(false);
+  const [platform, platformError] = usePlatform();
+  const names = platform?.names || {};
 
   function addSharedEvent(message, level = "info", source = "system") {
     setSharedEvents((prev) => [
@@ -20,61 +53,21 @@ export default function App() {
     ]);
   }
 
-  const appContext = useMemo(
-    () => ({
-      autoMode,
-      setAutoMode,
-      addSharedEvent,
-      sharedEvents,
-    }),
-    [autoMode, sharedEvents]
-  );
-
   return (
-    <div className="app-shell">
-      <header className="topbar">
-        <div>
-          <p className="eyebrow">Vault Secret Theatre</p>
-          <h1>Patient Monitor</h1>
-          <p className="subtitle">
-            Dynamic, root, and static secret lifecycle in one live control room
-          </p>
-        </div>
+    <Shell platform={platform} autoMode={autoMode} setAutoMode={setAutoMode}>
+      <div className="page-head">
+        <p className="eyebrow">Vault Secret Theatre</p>
+        <h1 className="h-page">Three secret lifecycles, live against PostgreSQL</h1>
+        <p className="lede">
+          A dynamic credential that lives for a minute, a static account whose password Vault rotates, and the
+          root credential Vault takes away from everyone else. Auto Mode drives all three.
+        </p>
+      </div>
 
-        <div className="topbar-actions">
-          <label className={`auto-mode-toggle ${autoMode ? "enabled" : ""}`}>
-            <input
-              type="checkbox"
-              checked={autoMode}
-              onChange={(e) => setAutoMode(e.target.checked)}
-            />
-            <span className="auto-mode-track">
-              <span className="auto-mode-knob" />
-            </span>
-            <span className="auto-mode-label">Auto Mode</span>
-          </label>
-
-          <div className="topbar-badge">Dynamic Secrets</div>
-        </div>
-      </header>
-
-      <main className="stacked-layout">
-        <PatientMonitor
-          autoMode={appContext.autoMode}
-          sharedEvents={appContext.sharedEvents}
-          addSharedEvent={appContext.addSharedEvent}
-        />
-
-        <DoctorCard
-          autoMode={appContext.autoMode}
-          addSharedEvent={appContext.addSharedEvent}
-        />
-
-        <SurgeonCard
-          autoMode={appContext.autoMode}
-          addSharedEvent={appContext.addSharedEvent}
-        />
-      </main>
-    </div>
+      <PatientMonitor autoMode={autoMode} sharedEvents={sharedEvents} />
+      <DoctorCard autoMode={autoMode} addSharedEvent={addSharedEvent} connection={names.connection || "hospital-postgres"} />
+      <SurgeonCard autoMode={autoMode} addSharedEvent={addSharedEvent} role={names.staticRole || "surgeon"} />
+      <PlatformPanel platform={platform} error={platformError} />
+    </Shell>
   );
 }

@@ -1,7 +1,7 @@
 {
-  "name": "api",
+  "name": "secret-theatre-api",
   "version": "1.0.0",
-  "description": "",
+  "description": "Vault Secret Theatre API: dynamic, static and root credential lanes",
   "main": "src/server.js",
   "scripts": {
     "dev": "node --watch src/server.js",
@@ -9,11 +9,10 @@
   },
   "keywords": [],
   "author": "",
-  "license": "ISC",
+  "license": "GPL-3.0-only",
   "type": "module",
   "dependencies": {
     "cors": "^2.8.6",
-    "dotenv": "^17.3.1",
     "express": "^5.2.1",
     "pg": "^8.20.0"
   }

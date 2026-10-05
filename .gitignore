@@ -22,83 +22,6 @@ FOLDER_TREE.md
 .ropeproject
 
 ########################################
-# 🐍 Python
-########################################
-__pycache__/
-*.py[cod]
-*.pyo
-*$py.class
-*.so
-*.egg
-*.egg-info/
-.installed.cfg
-.Python
-env/
-venv/
-ENV/
-env.bak/
-venv.bak/
-.venv/
-.python-version
-pip-log.txt
-pip-delete-this-directory.txt
-*.manifest
-*.spec
-*.mo
-*.pot
-*.cover
-*.out
-
-########################################
-# 📦 Python Build and Packaging
-########################################
-build/
-develop-eggs/
-dist/
-downloads/
-eggs/
-.eggs/
-lib/
-lib64/
-parts/
-sdist/
-var/
-wheels/
-target/
-
-########################################
-# 🧪 Python Testing and Coverage
-########################################
-htmlcov/
-.tox/
-.nox/
-.coverage
-.coverage.*
-.cache
-nosetests.xml
-coverage.xml
-.hypothesis/
-.pytest_cache/
-.pyre/
-.mypy_cache/
-.dmypy.json
-dmypy.json
-
-########################################
-# 🧬 Python Frameworks
-########################################
-local_settings.py
-db.sqlite3
-instance/
-.webassets-cache
-.scrapy
-docs/_build/
-site/
-celerybeat-schedule
-profile_default/
-ipython_config.py
-
-########################################
 # 📦 Node.js
 ########################################
 node_modules/
@@ -115,11 +38,13 @@ docker-compose.override.yml
 ########################################
 .env
 .env.*
+!.env.example
 
 ########################################
 # 🛠️ Terraform
 ########################################
 .terraform/
+**/.terraform/
 *.tfstate
 *.tfstate.backup
 *.tfplan
@@ -129,3 +54,12 @@ docker-compose.override.yml
 crash.log
 justfile
 
+
+########################################
+# 🔐 Lab secrets and state
+########################################
+# Whole tree: init material, TLS CA, Terraform state, AppRole credentials.
+# Scripts create the subdirectories they need.
+.secrets/
+vault-tls/vault.key
+backups/

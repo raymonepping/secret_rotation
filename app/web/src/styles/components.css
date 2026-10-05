@@ -1,0 +1,108 @@
+/* components.css — shared components. See DESIGN.md, "Components". */
+
+/* ── Pane ─────────────────────────────────────────────────────────────────── */
+.pane {
+  background: var(--vr-pane);
+  -webkit-backdrop-filter: blur(22px) saturate(150%); backdrop-filter: blur(22px) saturate(150%);
+  border: 1px solid var(--vr-line);
+  border-radius: var(--vr-radius-pane);
+  box-shadow: var(--vr-shadow), inset 0 1px 0 var(--vr-pane-edge);
+  padding: 20px;
+  min-width: 0;
+  transition: box-shadow 200ms var(--vr-ease), border-color 200ms var(--vr-ease);
+}
+@media (min-width: 1024px) { .pane { padding: 24px; } }
+/* A pane in a state that needs attention gets a 3px coloured top rule; the
+   glow of the old dark theme is gone. */
+.pane[data-tone="warn"], .pane[data-tone="denied"] { border-top: 3px solid var(--tone); }
+.pane-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 1rem; margin-bottom: 1rem; }
+.pane-head .eyebrow { margin-bottom: 0.15rem; }
+.pane-head-aside { display: flex; align-items: center; gap: 0.6rem; flex-wrap: wrap; justify-content: flex-end; }
+
+.page-head { display: grid; gap: 0.35rem; padding: 0.2rem 0 0.2rem; }
+
+/* ── Buttons ──────────────────────────────────────────────────────────────── */
+.btn {
+  display: inline-flex; align-items: center; justify-content: center; gap: 0.5rem;
+  height: 2.4rem; padding: 0 1rem; border: 0;
+  border-radius: var(--vr-radius-control);
+  font-weight: 600; font-size: 0.93rem; letter-spacing: -0.005em;
+  cursor: pointer; white-space: nowrap;
+  transition: background-color 180ms var(--vr-ease), box-shadow 180ms var(--vr-ease), opacity 180ms, transform 180ms var(--vr-ease);
+}
+.btn:active:not(:disabled) { transform: translateY(1px); }
+.btn:disabled { opacity: 0.5; cursor: not-allowed; }
+.btn-primary { background: var(--vr-ink); color: #fff; box-shadow: 0 6px 16px -8px rgb(15 26 42 / 0.6), inset 0 1px 0 rgb(255 255 255 / 0.14); }
+.btn-primary:hover:not(:disabled) { background: #1c2b41; }
+.btn-quiet { background: rgb(255 255 255 / 0.66); color: var(--vr-ink); box-shadow: inset 0 0 0 1px var(--vr-line), inset 0 1px 0 #fff; }
+.btn-quiet:hover:not(:disabled) { background: rgb(255 255 255 / 0.92); }
+.btn-amber { background: var(--vr-warn); color: #fff; box-shadow: 0 6px 16px -8px rgb(180 83 9 / 0.7); }
+.btn-amber:hover:not(:disabled) { background: #9a4708; }
+.btn-danger { background: var(--vr-denied); color: #fff; box-shadow: 0 6px 16px -8px rgb(200 30 30 / 0.6); }
+.btn-danger:hover:not(:disabled) { background: #a51616; }
+.btn-row { display: flex; flex-wrap: wrap; gap: 0.6rem; }
+
+/* ── Status pill ──────────────────────────────────────────────────────────── */
+.pill {
+  display: inline-flex; align-items: center; gap: 0.45rem;
+  height: 1.9rem; padding: 0 0.75rem;
+  border-radius: 999px;
+  background: var(--tone-soft); color: var(--tone);
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--tone) 28%, transparent);
+  font-size: 0.8rem; font-weight: 750; letter-spacing: 0.07em; text-transform: uppercase;
+  white-space: nowrap;
+}
+.pill::before { content: ""; width: 0.45rem; height: 0.45rem; border-radius: 999px; background: currentColor; }
+.pill.live::before { animation: pill-live 1.4s ease-in-out infinite; }
+@keyframes pill-live { 50% { opacity: 0.35; } }
+
+/* ── Key / value ──────────────────────────────────────────────────────────── */
+.kv-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(11rem, 1fr)); gap: 0.6rem; }
+.kv { background: var(--vr-well); border-radius: var(--vr-radius-control); padding: 0.55rem 0.75rem; min-width: 0; }
+.kv.wide { grid-column: 1 / -1; }
+/* A value without its own tone is ink: it must not inherit the pane's state. */
+.kv:not([class*="tone-"]) { --tone: var(--vr-ink); }
+.kv .label { margin-bottom: 0.15rem; }
+.kv-value { font-weight: 600; color: var(--tone, var(--vr-ink)); overflow-wrap: anywhere; font-variant-numeric: tabular-nums; }
+.kv-value.mono { font-weight: 500; }
+
+/* ── TTL bar: time drawn to scale ─────────────────────────────────────────── */
+.ttl { display: grid; gap: 0.3rem; }
+.ttl-head { display: flex; justify-content: space-between; align-items: baseline; gap: 1rem; }
+.ttl-value { font-weight: 700; font-size: 1.05rem; color: var(--tone); font-variant-numeric: tabular-nums; }
+.ttl-track { height: 6px; border-radius: 999px; background: var(--vr-well); box-shadow: inset 0 0 0 1px var(--vr-line); overflow: hidden; }
+.ttl-fill { height: 100%; border-radius: inherit; background: var(--tone); transition: width 500ms linear, background-color 200ms; }
+
+/* ── Verdict: Vault's answer, verbatim ────────────────────────────────────── */
+.verdict {
+  display: grid; gap: 0.3rem;
+  padding: 0.85rem 1rem; border-radius: var(--vr-radius-control);
+  background: color-mix(in srgb, var(--tone-soft) 60%, transparent);
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--tone) 22%, transparent);
+}
+.verdict-head { display: flex; flex-wrap: wrap; align-items: baseline; gap: 0.25rem 0.7rem; }
+.verdict-result { font-weight: 800; letter-spacing: 0.02em; color: var(--tone); }
+.verdict-title { font-weight: 600; }
+.verdict-sentence { color: var(--vr-ink-2); font-size: 0.93rem; }
+.verdict-vault { display: flex; flex-wrap: wrap; gap: 0.2rem 0.8rem; color: var(--vr-ink-3); }
+.verdict-vault .err { flex-basis: 100%; color: var(--vr-ink-2); overflow-wrap: anywhere; }
+
+/* ── Timeline ─────────────────────────────────────────────────────────────── */
+.timeline { list-style: none; margin: 0; padding: 0; display: grid; gap: 0.15rem; max-height: 26rem; overflow-y: auto; }
+.timeline li { display: grid; grid-template-columns: auto 1fr; gap: 0.1rem 0.7rem; padding: 0.5rem 0.2rem; border-bottom: 1px solid var(--vr-line); }
+.timeline li:last-child { border-bottom: 0; }
+.timeline-dot { grid-row: span 2; width: 0.55rem; height: 0.55rem; margin-top: 0.4rem; border-radius: 999px; background: var(--tone); }
+.timeline-meta { display: flex; align-items: center; gap: 0.5rem; font-size: 0.8rem; color: var(--vr-ink-3); }
+.timeline-source { font-family: var(--vr-mono); font-size: 0.8rem; padding: 0 0.4rem; border-radius: 5px; background: var(--vr-well); color: var(--vr-ink-2); }
+.timeline-msg { font-size: 0.93rem; color: var(--vr-ink); }
+.empty { color: var(--vr-ink-3); font-size: 0.93rem; padding: 0.4rem 0.2rem; }
+
+/* ── Toggle (Auto Mode): on = ink, never a state colour ───────────────────── */
+.toggle { display: inline-flex; align-items: center; gap: 0.55rem; cursor: pointer; font-weight: 600; font-size: 0.9rem; color: var(--vr-ink-2); }
+.toggle input { position: absolute; opacity: 0; width: 1px; height: 1px; }
+.toggle-track { position: relative; width: 2.6rem; height: 1.5rem; border-radius: 999px; background: rgb(15 26 42 / 0.16); transition: background-color 180ms var(--vr-ease); flex: none; }
+.toggle-knob { position: absolute; top: 3px; left: 3px; width: calc(1.5rem - 6px); height: calc(1.5rem - 6px); border-radius: 999px; background: #fff; box-shadow: 0 1px 2px rgb(15 26 42 / 0.25); transition: transform 180ms var(--vr-ease); }
+.toggle input:checked + .toggle-track { background: var(--vr-ink); }
+.toggle input:checked + .toggle-track .toggle-knob { transform: translateX(1.1rem); }
+.toggle input:focus-visible + .toggle-track { outline: 2px solid var(--vr-authority); outline-offset: 2px; }
+.toggle.on { color: var(--vr-ink); }

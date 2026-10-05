@@ -1,16 +1,21 @@
 import { useEffect, useState } from "react";
-
-const API_BASE = import.meta.env.VITE_API_BASE || "http://127.0.0.1:3000";
+import { API_BASE } from "../api";
+import { apiError, formatTime, statusTone } from "../lib/format";
+import KeyValue from "../ui/KeyValue";
+import Pane from "../ui/Pane";
+import StatusPill from "../ui/StatusPill";
+import Verdict from "../ui/Verdict";
 
 function normalizeStatus(status) {
   return status === "idle" ? "stable" : status;
 }
 
-export default function DoctorCard({ autoMode, addSharedEvent }) {
+export default function DoctorCard({ autoMode, addSharedEvent, connection }) {
   const [state, setState] = useState({
     status: "stable",
     lastRotation: null,
   });
+  const [failure, setFailure] = useState(null);
 
   async function rotateRoot() {
     setState((prev) => ({ ...prev, status: "rotating" }));
@@ -23,9 +28,10 @@ export default function DoctorCard({ autoMode, addSharedEvent }) {
       const data = await res.json();
 
       if (!res.ok || !data.ok) {
-        throw new Error(data.error || "Rotation failed");
+        throw apiError(res, data, "Rotation failed");
       }
 
+      setFailure(null);
       setState({
         status: "success",
         lastRotation: data.rotated_at,
@@ -39,11 +45,12 @@ export default function DoctorCard({ autoMode, addSharedEvent }) {
           status: "stable",
         }));
       }, 1400);
-    } catch (_err) {
+    } catch (error) {
       setState((prev) => ({
         ...prev,
         status: "failed",
       }));
+      setFailure({ title: "Rotate the root credential", path: `database/rotate-root/${connection}`, error: error.message, vaultStatus: error.vaultStatus });
 
       addSharedEvent("Doctor failed to rotate database root credential", "critical", "doctor");
     }
@@ -60,49 +67,36 @@ export default function DoctorCard({ autoMode, addSharedEvent }) {
   }, [autoMode]);
 
   const displayStatus = normalizeStatus(state.status);
+  const tone = statusTone(displayStatus);
 
   return (
-    <section className={`card lane-card status-${displayStatus}`}>
-      <div className="lane-card-inner">
-        <div className="lane-card-left">
-          <div className="panel-header lane-header">
-            <div>
-              <p className="panel-label">Lane</p>
-              <h2>Doctor</h2>
+    <Pane
+      id="doctor"
+      eyebrow="Root credential · rotate-root"
+      title="Doctor"
+      tone={tone === "warn" || tone === "denied" ? tone : undefined}
+      aside={<StatusPill status={displayStatus} live={state.status === "rotating"} />}
+    >
+      <div className="lane-body">
+        <div className="lane-row">
+          <div className="lane-body">
+            <p className="lede">
+              Vault changes the password of its own database account. Afterwards only Vault knows it, and
+              every lane keeps working.
+            </p>
+            <div className="kv-grid">
+              <KeyValue label="Connection" value={connection} tone="authority" mono />
+              <KeyValue label="Last rotation" value={formatTime(state.lastRotation)} tone={state.lastRotation ? "ok" : undefined} />
             </div>
           </div>
-
-          <div className="lane-stats">
-            <div className="lane-stat">
-              <span className="label">Last Rotation</span>
-              <span className="value">
-                {state.lastRotation
-                  ? new Date(state.lastRotation).toLocaleTimeString()
-                  : "n/a"}
-              </span>
-            </div>
-
-            <div className="lane-stat">
-              <span className="label">Connection</span>
-              <span className="value">library-postgres</span>
-            </div>
+          <div className="lane-actions">
+            <button type="button" onClick={rotateRoot} className="btn btn-amber" disabled={state.status === "rotating"}>
+              {state.status === "rotating" ? "Rotating…" : "Rotate DB root"}
+            </button>
           </div>
         </div>
-
-        <div className="lane-card-right">
-          <div className={`status-pill status-${displayStatus}`}>
-            {displayStatus.toUpperCase()}
-          </div>
-
-          <button
-            onClick={rotateRoot}
-            className="doctor-button"
-            disabled={state.status === "rotating"}
-          >
-            {state.status === "rotating" ? "Rotating..." : "Rotate DB Root"}
-          </button>
-        </div>
+        {failure && <Verdict {...failure} sentence="Vault did not rotate the root credential." />}
       </div>
-    </section>
+    </Pane>
   );
 }

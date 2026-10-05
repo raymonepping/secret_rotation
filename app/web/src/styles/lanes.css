@@ -1,0 +1,76 @@
+/* lanes.css — layout and the Patient monitor. Page-specific, built from tokens. */
+
+.lane-grid { display: grid; grid-template-columns: minmax(0, 1.55fr) minmax(0, 1fr); gap: var(--vr-stack); align-items: start; }
+.lane-side { display: grid; gap: var(--vr-stack); }
+.lane-body { display: grid; gap: 1rem; }
+.lane-row { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 1.2rem 2rem; align-items: end; }
+.lane-actions { display: flex; flex-wrap: wrap; gap: 0.6rem; justify-content: flex-end; }
+.section-anchor { scroll-margin-top: 5rem; }
+
+@media (max-width: 1100px) {
+  .lane-grid { grid-template-columns: 1fr; }
+  .lane-row { grid-template-columns: 1fr; }
+  .lane-actions { justify-content: flex-start; }
+}
+
+/* ── The monitor: an inset well with a fine grid; the trace takes the state ─ */
+.monitor {
+  position: relative; overflow: hidden;
+  min-height: 300px;
+  border-radius: var(--vr-radius-control);
+  background:
+    repeating-linear-gradient(to right, transparent 0 39px, rgb(15 26 42 / 0.06) 39px 40px),
+    repeating-linear-gradient(to bottom, transparent 0 39px, rgb(15 26 42 / 0.06) 39px 40px),
+    linear-gradient(180deg, rgb(255 255 255 / 0.55), rgb(240 244 248 / 0.75));
+  box-shadow: inset 0 0 0 1px var(--vr-line), inset 0 1px 3px rgb(15 26 42 / 0.06);
+}
+@media (min-width: 1024px) { .monitor { min-height: 360px; } }
+
+.monitor-trace { position: absolute; inset: 0; display: flex; align-items: center; }
+.monitor-trace svg { width: 200%; height: 62%; }
+.monitor-trace polyline { fill: none; stroke: var(--tone); stroke-width: 3; stroke-linejoin: round; stroke-linecap: round; vector-effect: non-scaling-stroke; transition: stroke 200ms; }
+.monitor-trace.pulse svg { animation: monitor-drift 4.8s linear infinite; }
+@keyframes monitor-drift { from { transform: translateX(0); } to { transform: translateX(-50%); } }
+
+/* The sweep reports that the monitor is live; it stops on flatline. */
+.monitor-sweep {
+  position: absolute; top: 0; bottom: 0; width: 18%;
+  background: linear-gradient(90deg, transparent, rgb(255 255 255 / 0.75) 50%, transparent);
+  animation: monitor-sweep 3.2s linear infinite;
+  pointer-events: none;
+}
+.monitor[data-status="flatline"] .monitor-sweep, .monitor[data-status="idle"] .monitor-sweep { display: none; }
+@keyframes monitor-sweep { from { left: -18%; } to { left: 100%; } }
+
+.monitor-word {
+  position: absolute; top: 1rem; right: 1.2rem;
+  font-size: clamp(1.6rem, 4vw, 2.8rem); font-weight: 800; letter-spacing: 0.1em;
+  color: var(--tone); opacity: 0.16; pointer-events: none;
+}
+.monitor-readout {
+  position: absolute; left: 1rem; right: 1rem; bottom: 1rem;
+  display: flex; flex-wrap: wrap; gap: 0.6rem;
+}
+.readout { background: var(--vr-pane-strong); border-radius: var(--vr-radius-control); box-shadow: inset 0 0 0 1px var(--vr-line); padding: 0.45rem 0.8rem; min-width: 0; }
+.readout .label { margin-bottom: 0.05rem; }
+.readout-value { font-weight: 800; font-size: 1.6rem; line-height: 1.1; color: var(--tone); font-variant-numeric: tabular-nums; }
+.readout-value.mono { font-size: 0.82rem; font-weight: 500; color: var(--vr-cipher); line-height: 1.5; }
+.readout.grow { flex: 1 1 14rem; }
+
+/* ── Platform tiles ───────────────────────────────────────────────────────── */
+.platform-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(15rem, 1fr)); gap: 0.8rem; }
+.tile { background: var(--vr-well); border-radius: var(--vr-radius-control); padding: 0.8rem 0.9rem; display: grid; gap: 0.55rem; align-content: start; }
+.tile-head { display: flex; justify-content: space-between; align-items: center; gap: 0.6rem; }
+.tile-name { font-weight: 700; }
+.tile dl { margin: 0; display: grid; grid-template-columns: auto 1fr; gap: 0.2rem 0.8rem; font-size: 0.86rem; }
+.tile dt { color: var(--vr-ink-3); }
+.tile dd { margin: 0; min-width: 0; overflow-wrap: anywhere; }
+.tile dd.ident { color: var(--vr-authority); }
+
+/* Phones: the readouts stack and would cover the trace; keep it above them. */
+@media (max-width: 639px) {
+  .monitor { min-height: 340px; }
+  .monitor-trace { bottom: 9.5rem; }
+  .monitor-trace svg { height: 80%; }
+  .monitor-word { top: 0.7rem; right: 0.9rem; }
+}

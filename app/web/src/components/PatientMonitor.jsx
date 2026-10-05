@@ -1,6 +1,11 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-
-const API_BASE = import.meta.env.VITE_API_BASE || "http://127.0.0.1:3000";
+import { API_BASE } from "../api";
+import { apiError, formatTime, maskPassword, shortenLeaseId, statusTone } from "../lib/format";
+import KeyValue from "../ui/KeyValue";
+import Pane from "../ui/Pane";
+import StatusPill from "../ui/StatusPill";
+import TtlBar from "../ui/TtlBar";
+import Verdict from "../ui/Verdict";
 
 const initialState = {
   role: "patient-readonly",
@@ -15,25 +20,21 @@ const initialState = {
   testResult: null,
 };
 
+// One heartbeat period of the trace, drawn twice so the drift loops seamlessly.
+const BEAT =
+  "110,110 160,108 190,111 220,110 260,112 320,110 360,110 400,110 430,60 455,140 485,85 515,110 620,110 700,110 760,108 810,111 860,110 900,112 950,110 980,110 1010,70 1035,145 1065,88 1095,110 1200,110";
+const TRACE = `0,110 ${BEAT} ${BEAT.split(" ")
+  .map((p) => {
+    const [x, y] = p.split(",");
+    return `${Number(x) + 1200},${y}`;
+  })
+  .join(" ")}`;
+const FLAT = "0,110 2400,110";
+
+const LEVEL_TONE = { success: "ok", warning: "warn", critical: "denied", info: "idle" };
+
 function nowTs() {
   return new Date().toISOString();
-}
-
-function formatTime(iso) {
-  if (!iso) return "n/a";
-  return new Date(iso).toLocaleTimeString();
-}
-
-function maskPassword(password) {
-  if (!password) return "n/a";
-  if (password.length <= 6) return "••••••";
-  return `${password.slice(0, 2)}••••••${password.slice(-2)}`;
-}
-
-function shortenLeaseId(leaseId) {
-  if (!leaseId) return "n/a";
-  if (leaseId.length <= 42) return leaseId;
-  return `${leaseId.slice(0, 24)}...${leaseId.slice(-12)}`;
 }
 
 function computeStatus(secondsRemaining, currentStatus) {
@@ -44,9 +45,10 @@ function computeStatus(secondsRemaining, currentStatus) {
   return "stable";
 }
 
-export default function PatientMonitor({ autoMode, sharedEvents, addSharedEvent }) {
+export default function PatientMonitor({ autoMode, sharedEvents }) {
   const [patient, setPatient] = useState(initialState);
   const [localEvents, setLocalEvents] = useState([]);
+  const [failure, setFailure] = useState(null);
   const [busy, setBusy] = useState({
     issue: false,
     test: false,
@@ -70,13 +72,6 @@ export default function PatientMonitor({ autoMode, sharedEvents, addSharedEvent 
       },
       ...prev,
     ]);
-  }
-
-  function addEvent(message, level = "info", source = "patient") {
-    addLocalEvent(message, level);
-    if (source !== "patient") {
-      addSharedEvent(message, level, source);
-    }
   }
 
   function resetThresholdRefs() {
@@ -145,15 +140,18 @@ export default function PatientMonitor({ autoMode, sharedEvents, addSharedEvent 
       const data = await response.json();
 
       if (!response.ok || !data.ok) {
-        throw new Error(data.error?.message || data.error || "Failed to issue secret");
+        throw apiError(response, data, "Failed to issue secret");
       }
 
-      const secondsRemaining = Math.max(
-        0,
-        Math.floor((new Date(data.expires_at).getTime() - Date.now()) / 1000)
-      );
+      // Count down from the lease duration on this browser's clock. Vault
+      // enforces the duration on its own clock; the absolute expires_at from
+      // the server is off by however far the Podman VM clock drifted.
+      const issuedAt = new Date().toISOString();
+      const expiresAt = new Date(Date.now() + data.lease_duration * 1000).toISOString();
+      const secondsRemaining = data.lease_duration;
 
       resetThresholdRefs();
+      setFailure(null);
 
       setPatient({
         role: data.role,
@@ -161,8 +159,8 @@ export default function PatientMonitor({ autoMode, sharedEvents, addSharedEvent 
         username: data.username,
         password: data.password,
         leaseDuration: data.lease_duration,
-        issuedAt: data.issued_at,
-        expiresAt: data.expires_at,
+        issuedAt,
+        expiresAt,
         secondsRemaining,
         status: "stable",
         testResult: null,
@@ -174,6 +172,7 @@ export default function PatientMonitor({ autoMode, sharedEvents, addSharedEvent 
         performPulseCheck({ silent: false });
       }, 250);
     } catch (error) {
+      setFailure({ title: "Issue a dynamic credential", path: `database/creds/${patient.role}`, error: error.message, vaultStatus: error.vaultStatus });
       addLocalEvent(`Issue failed: ${error.message}`, "critical");
     } finally {
       setBusy((prev) => ({ ...prev, issue: false }));
@@ -217,7 +216,7 @@ export default function PatientMonitor({ autoMode, sharedEvents, addSharedEvent 
       const data = await response.json();
 
       if (!response.ok || !data.ok) {
-        throw new Error(data.error || "Revoke failed");
+        throw apiError(response, data, "Revoke failed");
       }
 
       setPatient((prev) => ({
@@ -228,6 +227,7 @@ export default function PatientMonitor({ autoMode, sharedEvents, addSharedEvent 
 
       addLocalEvent("Lease revoked. Flatline detected", "critical");
     } catch (error) {
+      setFailure({ title: "Revoke the lease", path: "sys/leases/revoke", error: error.message, vaultStatus: error.vaultStatus });
       addLocalEvent(`Revoke failed: ${error.message}`, "critical");
     } finally {
       setBusy((prev) => ({ ...prev, revoke: false }));
@@ -315,161 +315,113 @@ export default function PatientMonitor({ autoMode, sharedEvents, addSharedEvent 
       .slice(0, 12);
   }, [sharedEvents, localEvents]);
 
-  const statusClass = useMemo(() => `status-${patient.status}`, [patient.status]);
-
-  const waveformClass = useMemo(() => {
-    return `waveform ${statusClass} ${patient.status !== "flatline" ? "pulse" : "flat"}`;
-  }, [statusClass, patient.status]);
-
-  const statusTitle = useMemo(() => {
-    switch (patient.status) {
-      case "stable":
-        return "STABLE";
-      case "warning":
-        return "WARNING";
-      case "critical":
-        return "CRITICAL";
-      case "flatline":
-        return "FLATLINE";
-      default:
-        return "IDLE";
-    }
-  }, [patient.status]);
+  const tone = statusTone(patient.status);
+  const lastPulse = patient.testResult?.ok ? "alive" : patient.testResult?.error ? "failed" : "n/a";
 
   return (
-    <div className="dashboard-grid">
-      <section className={`monitor-panel card ${statusClass}`}>
-        <div className="panel-header">
-          <div>
-            <p className="panel-label">Lane</p>
-            <h2>Patient</h2>
-          </div>
-          <div className={`status-pill ${statusClass}`}>
-            {patient.status.toUpperCase()}
-          </div>
-        </div>
+    <div className="lane-grid">
+      <Pane
+        id="patient"
+        eyebrow="Dynamic secret · lease"
+        title="Patient"
+        tone={tone === "warn" || tone === "denied" ? tone : undefined}
+        aside={<StatusPill status={patient.status} live={patient.status === "critical"} />}
+      >
+        <div className="lane-body">
+          <p className="lede">
+            Vault creates a PostgreSQL role on request and drops it when the lease ends. Revoke ends it now.
+          </p>
 
-        <div className={`monitor-screen ${statusClass}`}>
-          <div className="screen-sweep" />
-
-          <div className={waveformClass}>
-            <svg viewBox="0 0 1200 220" preserveAspectRatio="none">
-              <polyline
-                points={
-                  patient.status === "flatline"
-                    ? "0,110 1200,110"
-                    : "0,110 110,110 160,108 190,111 220,110 260,112 320,110 360,110 400,110 430,60 455,140 485,85 515,110 620,110 700,110 760,108 810,111 860,110 900,112 950,110 980,110 1010,70 1035,145 1065,88 1095,110 1200,110"
-                }
-              />
-            </svg>
-          </div>
-
-          <div className={`state-overlay ${statusClass}`}>{statusTitle}</div>
-
-          <div className="monitor-overlay">
-            <div className="metric">
-              <span className="metric-label">Seconds Left</span>
-              <span className="metric-value">{patient.secondsRemaining}</span>
+          <div className={`monitor tone-${tone}`} data-status={patient.status}>
+            <div className={`monitor-trace ${patient.status !== "flatline" && patient.status !== "idle" ? "pulse" : ""}`}>
+              <svg viewBox="0 0 2400 220" preserveAspectRatio="none" aria-hidden="true">
+                <polyline points={patient.status === "flatline" || patient.status === "idle" ? FLAT : TRACE} />
+              </svg>
             </div>
-            <div className="metric">
-              <span className="metric-label">Lease</span>
-              <span className="metric-value small" title={patient.leaseId || "n/a"}>
-                {shortenLeaseId(patient.leaseId)}
-              </span>
-            </div>
-          </div>
-        </div>
+            <div className="monitor-sweep" aria-hidden="true" />
+            <div className="monitor-word" aria-hidden="true">{patient.status.toUpperCase()}</div>
 
-        <div className="button-row">
-          <button onClick={handleIssue} disabled={busy.issue}>
-            {busy.issue ? "Issuing..." : "Issue Secret"}
-          </button>
-          <button
-            onClick={handleTest}
-            disabled={busy.test || !patient.username || patient.status === "idle"}
-            className="secondary"
-          >
-            {busy.test ? "Testing..." : "Test Pulse"}
-          </button>
-          <button
-            onClick={handleRevoke}
-            disabled={busy.revoke || !patient.leaseId || patient.status === "flatline"}
-            className="danger"
-          >
-            {busy.revoke ? "Revoking..." : "Revoke"}
-          </button>
-        </div>
-      </section>
-
-      <aside className="side-column">
-        <section className="card">
-          <div className="panel-header compact">
-            <div>
-              <p className="panel-label">Vitals</p>
-              <h3>Current Secret</h3>
+            <div className="monitor-readout">
+              <div className="readout">
+                <span className="label">Seconds left</span>
+                <span className="readout-value tabular">{patient.secondsRemaining}</span>
+              </div>
+              <div className="readout grow">
+                <span className="label">Lease</span>
+                <span className="readout-value mono" title={patient.leaseId || "n/a"}>
+                  {shortenLeaseId(patient.leaseId)}
+                </span>
+              </div>
             </div>
           </div>
 
-          <div className="vitals-grid">
-            <Vital label="Role" value={patient.role} />
-            <Vital label="Username" value={patient.username || "n/a"} mono className="span-2" />
-            <Vital label="Password" value={maskPassword(patient.password)} mono />
-            <Vital label="Lease duration" value={patient.leaseDuration ? `${patient.leaseDuration}s` : "n/a"} />
-            <Vital label="Issued at" value={formatTime(patient.issuedAt)} />
-            <Vital label="Expires at" value={formatTime(patient.expiresAt)} />
-            <Vital label="Lease ID" value={patient.leaseId || "n/a"} mono className="span-2" />
-            <Vital label="Status" value={patient.status} />
-            <Vital
+          <TtlBar label="Lease remaining" seconds={patient.secondsRemaining} total={patient.leaseDuration} tone={tone} />
+
+          {failure && <Verdict {...failure} sentence="Vault did not complete this request." />}
+
+          <div className="btn-row">
+            <button type="button" className="btn btn-primary" onClick={handleIssue} disabled={busy.issue}>
+              {busy.issue ? "Issuing…" : "Issue secret"}
+            </button>
+            <button
+              type="button"
+              className="btn btn-quiet"
+              onClick={handleTest}
+              disabled={busy.test || !patient.username || patient.status === "idle"}
+            >
+              {busy.test ? "Testing…" : "Test pulse"}
+            </button>
+            <button
+              type="button"
+              className="btn btn-danger"
+              onClick={handleRevoke}
+              disabled={busy.revoke || !patient.leaseId || patient.status === "flatline"}
+            >
+              {busy.revoke ? "Revoking…" : "Revoke"}
+            </button>
+          </div>
+        </div>
+      </Pane>
+
+      <div className="lane-side">
+        <Pane eyebrow="Vitals" title="Current secret" as="aside">
+          <div className="kv-grid">
+            <KeyValue label="Role" value={patient.role} tone="authority" />
+            <KeyValue label="Status" value={patient.status} tone={tone} />
+            <KeyValue label="Username" value={patient.username || "n/a"} tone="authority" mono wide />
+            <KeyValue label="Password" value={maskPassword(patient.password)} tone="cipher" />
+            <KeyValue label="Lease duration" value={patient.leaseDuration ? `${patient.leaseDuration}s` : "n/a"} />
+            <KeyValue label="Issued at" value={formatTime(patient.issuedAt)} />
+            <KeyValue label="Expires at" value={formatTime(patient.expiresAt)} />
+            <KeyValue label="Lease ID" value={patient.leaseId || "n/a"} tone="cipher" wide />
+            <KeyValue
               label="Last pulse"
-              value={
-                patient.testResult?.ok
-                  ? "alive"
-                  : patient.testResult?.error
-                  ? "failed"
-                  : "n/a"
-              }
+              value={lastPulse}
+              tone={lastPulse === "alive" ? "ok" : lastPulse === "failed" ? "denied" : undefined}
             />
           </div>
-        </section>
+        </Pane>
 
-        <section className="card">
-          <div className="panel-header compact">
-            <div>
-              <p className="panel-label">Events</p>
-              <h3>Timeline</h3>
-            </div>
-          </div>
-
-          <div className="event-list">
-            {mergedEvents.length === 0 ? (
-              <p className="empty-state">No events yet. Admit a patient.</p>
-            ) : (
-              mergedEvents.map((event) => (
-                <div key={event.id} className={`event-item event-${event.level}`}>
-                  <div className="event-time">
-                    {formatTime(event.ts)}
-                    {event.source && (
-                      <span className={`event-source source-${event.source}`}>
-                        {event.source}
-                      </span>
-                    )}
-                  </div>
-                  <div className="event-message">{event.message}</div>
-                </div>
-              ))
-            )}
-          </div>
-        </section>
-      </aside>
-    </div>
-  );
-}
-
-function Vital({ label, value, mono = false, className = "" }) {
-  return (
-    <div className={`vital ${className}`}>
-      <div className="vital-label">{label}</div>
-      <div className={`vital-value ${mono ? "mono" : ""}`}>{value}</div>
+        <Pane eyebrow="Events" title="Timeline" as="aside">
+          {mergedEvents.length === 0 ? (
+            <p className="empty">No events yet. Admit a patient.</p>
+          ) : (
+            <ol className="timeline" aria-live="polite">
+              {mergedEvents.map((event) => (
+                <li key={event.id} className={`tone-${LEVEL_TONE[event.level] || "idle"}`}>
+                  <span className="timeline-dot" aria-hidden="true" />
+                  <span className="timeline-meta">
+                    <span className="tabular">{formatTime(event.ts)}</span>
+                    {event.source && <span className="timeline-source">{event.source}</span>}
+                    <span className="visually-hidden">{event.level}</span>
+                  </span>
+                  <span className="timeline-msg">{event.message}</span>
+                </li>
+              ))}
+            </ol>
+          )}
+        </Pane>
+      </div>
     </div>
   );
 }

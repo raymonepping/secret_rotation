@@ -1,11 +1,9 @@
 import express from "express";
-import pg from "pg";
+import { config } from "../config.js";
+import { pulseCheck } from "../pulse.js";
+import { vault, vaultError } from "../vault.js";
 
 const router = express.Router();
-const { Client } = pg;
-
-const VAULT_ADDR = process.env.VAULT_ADDR || "http://127.0.0.1:8200";
-const VAULT_TOKEN = process.env.VAULT_TOKEN;
 
 function nowIso() {
   return new Date().toISOString();
@@ -23,46 +21,26 @@ function addSeconds(seconds) {
 
 router.post("/issue", async (_req, res) => {
   try {
-    const response = await fetch(
-      `${VAULT_ADDR}/v1/database/static-creds/surgeon`,
-      {
-        method: "GET",
-        headers: {
-          "X-Vault-Token": VAULT_TOKEN,
-        },
-      },
-    );
+    const r = await vault(`database/static-creds/${config.names.staticRole}`);
+    if (!r.ok) return res.status(r.status).json(vaultError(r));
 
-    const payload = await response.json();
-
-    if (!response.ok) {
-      return res.status(response.status).json({
-        ok: false,
-        error: payload,
-      });
-    }
-
-    const ttl = Number(payload.data?.ttl || 0);
-    const rotationPeriod = Number(payload.data?.rotation_period || 0);
-    const lastVaultRotation = payload.data?.last_vault_rotation || null;
+    const ttl = Number(r.data.data?.ttl || 0);
+    const rotationPeriod = Number(r.data.data?.rotation_period || 0);
 
     return res.json({
       ok: true,
-      role: "surgeon",
-      username: payload.data?.username || "",
-      password: payload.data?.password || "",
+      role: config.names.staticRole,
+      username: r.data.data?.username || "",
+      password: r.data.data?.password || "",
       ttl,
       rotation_period: rotationPeriod,
       issued_at: nowIso(),
       rotates_at: ttl > 0 ? addSeconds(ttl) : null,
-      last_vault_rotation: lastVaultRotation,
+      last_vault_rotation: r.data.data?.last_vault_rotation || null,
       status: "stable",
     });
   } catch (error) {
-    return res.status(500).json({
-      ok: false,
-      error: error.message,
-    });
+    return res.status(500).json({ ok: false, error: error.message });
   }
 });
 
@@ -76,61 +54,14 @@ router.post("/test", async (req, res) => {
     });
   }
 
-  const client = new Client({
-    host: process.env.PGHOST || "127.0.0.1",
-    port: Number(process.env.PGPORT || 5432),
-    database: process.env.PGDATABASE || "librarydemo",
-    user: username,
-    password,
-  });
-
-  try {
-    await client.connect();
-
-    const result = await client.query(`
-      SELECT
-        current_user,
-        now(),
-        count(*)::int AS rows
-      FROM patient_status_demo
-    `);
-
-    return res.json({
-      ok: true,
-      checked_at: nowIso(),
-      result: result.rows[0],
-    });
-  } catch (error) {
-    return res.status(401).json({
-      ok: false,
-      checked_at: nowIso(),
-      error: error.message,
-    });
-  } finally {
-    await client.end().catch(() => {});
-  }
+  const pulse = await pulseCheck(username, password);
+  return res.status(pulse.ok ? 200 : 401).json({ ...pulse, checked_at: nowIso() });
 });
 
 router.post("/rotate", async (_req, res) => {
   try {
-    const response = await fetch(
-      `${VAULT_ADDR}/v1/database/rotate-role/surgeon`,
-      {
-        method: "POST",
-        headers: {
-          "X-Vault-Token": VAULT_TOKEN,
-        },
-      },
-    );
-
-    const text = await response.text();
-
-    if (!response.ok) {
-      return res.status(response.status).json({
-        ok: false,
-        error: text,
-      });
-    }
+    const r = await vault(`database/rotate-role/${config.names.staticRole}`, { method: "POST" });
+    if (!r.ok) return res.status(r.status).json(vaultError(r));
 
     return res.json({
       ok: true,
@@ -138,10 +69,7 @@ router.post("/rotate", async (_req, res) => {
       message: "Static role rotated",
     });
   } catch (error) {
-    return res.status(500).json({
-      ok: false,
-      error: error.message,
-    });
+    return res.status(500).json({ ok: false, error: error.message });
   }
 });
 

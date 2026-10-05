@@ -1,19 +1,18 @@
-import dotenv from "dotenv";
 import express from "express";
 import cors from "cors";
 
+import { config } from "./config.js";
+import { readToken } from "./vault.js";
 import patientRoutes from "./routes/patient.js";
 import doctorRoutes from "./routes/doctor.js";
 import surgeonRoutes from "./routes/surgeon.js";
-
-dotenv.config();
+import platformRoutes from "./routes/platform.js";
 
 const app = express();
-const port = Number(process.env.PORT || 3000);
 
 app.use(
   cors({
-    origin: ["http://127.0.0.1:3001", "http://localhost:3001"],
+    origin: config.corsOrigins,
     methods: ["GET", "POST", "PUT", "OPTIONS"],
     allowedHeaders: ["Content-Type"],
   }),
@@ -21,10 +20,11 @@ app.use(
 
 app.use(express.json());
 
-app.get("/health", (_req, res) => {
+app.get("/health", async (_req, res) => {
   res.json({
     ok: true,
-    service: "library-api",
+    service: "secret-theatre-api",
+    vault_token: (await readToken()) ? "present" : "missing",
     timestamp: new Date().toISOString(),
   });
 });
@@ -32,7 +32,14 @@ app.get("/health", (_req, res) => {
 app.use("/api/patient", patientRoutes);
 app.use("/api/doctor", doctorRoutes);
 app.use("/api/surgeon", surgeonRoutes);
+app.use("/api/platform", platformRoutes);
 
-app.listen(port, () => {
-  console.log(`library-api listening on http://127.0.0.1:${port}`);
+const server = app.listen(config.port, () => {
+  console.log(`secret-theatre-api listening on :${config.port}`);
 });
+
+// PID 1 in the container: without a handler Node ignores SIGTERM and Podman
+// kills it after the stop timeout (exit 137).
+for (const signal of ["SIGTERM", "SIGINT"]) {
+  process.on(signal, () => server.close(() => process.exit(0)));
+}

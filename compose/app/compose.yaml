@@ -1,0 +1,168 @@
+# compose/app/compose.yaml — the Secret Theatre itself.
+#
+#   rotator      keeps the API identity's AppRole secret-id valid (Durin's
+#                pattern): writes role-id + secret-id to the `approle-api` volume
+#   vault-agent  logs in with them, token file in the `agent-token` volume
+#   api          Express; reads that token file per request, never an env var
+#   web          nginx: the React build, and /api proxied to the API
+#
+# The only credential handed over by a human is the rotator's own, in
+# .secrets/vault/rotator/ (make rotator-bootstrap). Images are built by
+# `make app-build` (podman build, not compose: the build context must honour
+# .containerignore). Needs vault-1 configured by Terraform.
+
+services:
+  # One-shot: Podman creates named volumes owned by root. The rotator (uid
+  # 100) writes the AppRole files, the agent (uid 100) reads them and writes
+  # the token sink, the API (gid 1000) reads the sink.
+  volume-init:
+    image: ${ALPINE_IMAGE}
+    container_name: srot-app-volume-init
+    user: "0:0"
+    network_mode: none
+    entrypoint: ["/bin/sh", "-c", "chown 100:1000 /sink /approle && chmod 750 /sink && chmod 700 /approle && echo '[volume-init] done'"]
+    volumes:
+      - agent-token:/sink
+      - approle-api:/approle
+    restart: "no"
+
+  # Durin's secret-id rotator. Decides on Vault's own answer: rotates when
+  # Vault no longer accepts the secret-id on disk or less than 1/3 of its
+  # real life is left; one new secret-id per rotation, the replaced one is
+  # destroyed. `make rotate-now` wakes it.
+  rotator:
+    image: ${VAULT_IMAGE}
+    container_name: srot-rotator
+    hostname: rotator
+    user: "100:1000"
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    read_only: true
+    tmpfs: [/tmp, /home/vault]
+    entrypoint: ["/bin/sh", "/vault/rotator/rotator.sh"]
+    environment:
+      VAULT_ADDR: https://vault-1:8200
+      VAULT_CACERT: /vault/tls/ca-chain.pem
+      TARGET_ROLES: secret-theatre-api
+      ROTATOR_CREDS_DIR: /run/rotator
+      # A pass is one login and one lookup: cheap. 60s bounds how long a
+      # destroyed secret-id can leave the agent unable to log in.
+      CHECK_INTERVAL_SECONDS: "60"
+      ROTATE_BELOW_FRACTION: "3"
+      WARN_IF_SHORTER_THAN: "7776000"   # the 90 days the API role declares
+    volumes:
+      - ../../vault-tls/ca-chain.pem:/vault/tls/ca-chain.pem:ro             # host
+      - ../common/rotator:/vault/rotator:ro                                 # host
+      - ../../.secrets/vault/rotator:/run/rotator:ro                        # host: the rotator's own AppRole
+      - approle-api:/run/approle                                            # persistent: current secret-id
+    networks: [default]
+    restart: unless-stopped
+    depends_on:
+      volume-init:
+        condition: service_completed_successfully
+    healthcheck:
+      test: ["CMD-SHELL", "/bin/sh /vault/rotator/healthcheck.sh"]
+      interval: 10s
+      timeout: 3s
+      start_period: 15s
+      retries: 5
+
+  vault-agent:
+    image: ${VAULT_IMAGE}
+    container_name: srot-vault-agent
+    hostname: vault-agent
+    user: "100:1000"
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    read_only: true
+    tmpfs: [/tmp, /home/vault]
+    entrypoint: ["/bin/sh", "/vault/agent/entrypoint.sh"]
+    environment:
+      AGENT_NAME: secret-theatre-api
+      APPROLE_DIR: /run/approle/secret-theatre-api
+      TOKEN_FILE: /vault/secrets/token
+      VAULT_ADDR: https://vault-1:8200
+      VAULT_CACERT: /vault/tls/ca-chain.pem
+    volumes:
+      - ../../vault-tls/ca-chain.pem:/vault/tls/ca-chain.pem:ro             # host
+      - ../common/agent/entrypoint.sh:/vault/agent/entrypoint.sh:ro         # host
+      - ./agent/config.hcl:/vault/agent/config.hcl:ro                       # host
+      - approle-api:/run/approle:ro                                         # written by the rotator
+      - agent-token:/vault/secrets                                          # ephemeral content: token sink
+    networks: [default]
+    # on-failure: the watchdog exits non-zero when Vault rejects the token,
+    # and the fresh container logs in again. A deliberate stop stays stopped.
+    restart: on-failure
+    depends_on:
+      rotator:
+        condition: service_healthy
+    healthcheck:
+      # A real lookup, not file existence: a dead token is still a non-empty file.
+      test: ["CMD-SHELL", "test -s /vault/secrets/token && VAULT_TOKEN=$$(cat /vault/secrets/token) vault token lookup >/dev/null"]
+      interval: 10s
+      timeout: 5s
+      start_period: 20s
+      retries: 6
+
+  api:
+    image: localhost/srot-api:local
+    container_name: srot-api
+    hostname: api
+    user: "1000:1000"
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    read_only: true
+    tmpfs: [/tmp]
+    environment:
+      PORT: "3000"
+      VAULT_ADDR: https://vault-1:8200
+      VAULT_SEAL_ADDR: https://vault-s:8200
+      VAULT_TOKEN_FILE: /run/vault/token
+      # Node trusts the lab CA in addition to its bundled roots.
+      NODE_EXTRA_CA_CERTS: /etc/srot/ca-chain.pem
+      PGHOST: srot-postgres
+      PGPORT: "5432"
+      PGDATABASE: "${SROT_DB_NAME}"
+      DB_CONNECTION: "${SROT_DB_CONNECTION}"
+      DB_ROLE_DYNAMIC: "${SROT_DB_ROLE_DYNAMIC}"
+      DB_ROLE_STATIC: "${SROT_DB_ROLE_STATIC}"
+      CORS_ORIGINS: "http://127.0.0.1:${SROT_PORT_WEB_DEV},http://localhost:${SROT_PORT_WEB_DEV}"
+    ports: ["127.0.0.1:${SROT_PORT_API}:3000"]
+    volumes:
+      - ../../vault-tls/ca-chain.pem:/etc/srot/ca-chain.pem:ro    # host
+      - agent-token:/run/vault:ro                                 # the agent's token sink
+    networks: [default]
+    restart: unless-stopped
+    depends_on:
+      vault-agent:
+        condition: service_healthy
+
+  web:
+    image: localhost/srot-web:local
+    container_name: srot-web
+    hostname: web
+    user: "101:101"
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    read_only: true
+    tmpfs: [/tmp]
+    environment:
+      # The official image's entrypoint renders templates here and exports
+      # NGINX_LOCAL_RESOLVERS (Podman's DNS) for the lazy upstream.
+      NGINX_ENTRYPOINT_LOCAL_RESOLVERS: "1"
+      NGINX_ENVSUBST_OUTPUT_DIR: /tmp
+    ports: ["127.0.0.1:${SROT_PORT_WEB}:8080"]
+    networks: [default]
+    restart: unless-stopped
+
+networks:
+  default:
+    name: srot-internal
+    external: true
+
+volumes:
+  agent-token: {}
+  # role-id, secret-id and metadata of the API identity. Persistent: a
+  # recreated rotator keeps tracking the secret-id it issued.
+  approle-api:
+    labels: { io.srot.data: "true" }

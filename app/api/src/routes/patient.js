@@ -1,11 +1,9 @@
 import express from "express";
-import pg from "pg";
+import { config } from "../config.js";
+import { pulseCheck } from "../pulse.js";
+import { vault, vaultError } from "../vault.js";
 
 const router = express.Router();
-const { Client } = pg;
-
-const VAULT_ADDR = process.env.VAULT_ADDR || "http://127.0.0.1:8200";
-const VAULT_TOKEN = process.env.VAULT_TOKEN;
 
 function nowIso() {
   return new Date().toISOString();
@@ -17,42 +15,23 @@ function addSecondsToNow(seconds) {
 
 router.post("/issue", async (_req, res) => {
   try {
-    const response = await fetch(
-      `${VAULT_ADDR}/v1/database/creds/patient-readonly`,
-      {
-        method: "GET",
-        headers: {
-          "X-Vault-Token": VAULT_TOKEN,
-        },
-      },
-    );
-
-    const payload = await response.json();
-
-    if (!response.ok) {
-      return res.status(response.status).json({
-        ok: false,
-        error: payload,
-      });
-    }
+    const r = await vault(`database/creds/${config.names.dynamicRole}`);
+    if (!r.ok) return res.status(r.status).json(vaultError(r));
 
     return res.json({
       ok: true,
-      role: "patient-readonly",
-      lease_id: payload.lease_id,
-      lease_duration: payload.lease_duration,
-      renewable: payload.renewable,
-      username: payload.data.username,
-      password: payload.data.password,
+      role: config.names.dynamicRole,
+      lease_id: r.data.lease_id,
+      lease_duration: r.data.lease_duration,
+      renewable: r.data.renewable,
+      username: r.data.data.username,
+      password: r.data.data.password,
       issued_at: nowIso(),
-      expires_at: addSecondsToNow(payload.lease_duration),
+      expires_at: addSecondsToNow(r.data.lease_duration),
       status: "stable",
     });
   } catch (error) {
-    return res.status(500).json({
-      ok: false,
-      error: error.message,
-    });
+    return res.status(500).json({ ok: false, error: error.message });
   }
 });
 
@@ -66,39 +45,8 @@ router.post("/test", async (req, res) => {
     });
   }
 
-  const client = new Client({
-    host: process.env.PGHOST || "127.0.0.1",
-    port: Number(process.env.PGPORT || 5432),
-    database: process.env.PGDATABASE || "librarydemo",
-    user: username,
-    password,
-  });
-
-  try {
-    await client.connect();
-
-    const result = await client.query(`
-      SELECT
-        current_user,
-        now(),
-        count(*)::int AS rows
-      FROM patient_status_demo
-    `);
-
-    return res.json({
-      ok: true,
-      checked_at: nowIso(),
-      result: result.rows[0],
-    });
-  } catch (error) {
-    return res.status(401).json({
-      ok: false,
-      checked_at: nowIso(),
-      error: error.message,
-    });
-  } finally {
-    await client.end().catch(() => {});
-  }
+  const pulse = await pulseCheck(username, password);
+  return res.status(pulse.ok ? 200 : 401).json({ ...pulse, checked_at: nowIso() });
 });
 
 router.post("/revoke", async (req, res) => {
@@ -112,23 +60,8 @@ router.post("/revoke", async (req, res) => {
   }
 
   try {
-    const response = await fetch(`${VAULT_ADDR}/v1/sys/leases/revoke`, {
-      method: "PUT",
-      headers: {
-        "Content-Type": "application/json",
-        "X-Vault-Token": VAULT_TOKEN,
-      },
-      body: JSON.stringify({ lease_id }),
-    });
-
-    const text = await response.text();
-
-    if (!response.ok) {
-      return res.status(response.status).json({
-        ok: false,
-        error: text,
-      });
-    }
+    const r = await vault("sys/leases/revoke", { method: "PUT", body: { lease_id } });
+    if (!r.ok) return res.status(r.status).json(vaultError(r));
 
     return res.json({
       ok: true,
@@ -137,10 +70,7 @@ router.post("/revoke", async (req, res) => {
       status: "flatline",
     });
   } catch (error) {
-    return res.status(500).json({
-      ok: false,
-      error: error.message,
-    });
+    return res.status(500).json({ ok: false, error: error.message });
   }
 });
 
